@@ -432,6 +432,17 @@ export function findFirstVariableDeclaration(
   return first;
 }
 
+export function findFirstClassDeclaration(
+  nodes: ts.NodeArray<ts.Node>,
+  name: string
+) {
+  return findNode<ts.ClassDeclaration>(
+    nodes,
+    ts.SyntaxKind.ClassDeclaration,
+    (n) => n?.getText() === name
+  );
+}
+
 export function changePropertyValue(
   o: ts.ObjectLiteralExpression,
   property: string,

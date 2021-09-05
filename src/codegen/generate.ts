@@ -1,11 +1,26 @@
 import _ from "lodash";
-import ts, { factory } from "typescript";
+import ts, { ClassDeclaration, factory } from "typescript";
 import path from "path";
 import { OpenAPIV3 } from "openapi-types";
 import * as cg from "./tscodegen";
-import generateServers, { defaultBaseUrl } from "./generateServers";
+// import generateServers, { defaultBaseUrl } from "./generateServers";
 import { Opts } from ".";
 import { threadId } from "worker_threads";
+
+const StubSource = `import { AxiosResponse, AxiosRequestConfig } from 'axios';
+
+type RequestFunction =  < T = any, R = AxiosResponse < T >> (config: AxiosRequestConfig)=> Promise<R>;
+
+class API  {
+  constructor(request: RequestFunction) {
+    this.request = request;
+  }
+
+  request: RequestFunction;
+}
+
+export default API;
+`;
 
 export const verbs = [
   "GET",
@@ -562,30 +577,44 @@ export default class ApiGenerator {
     this.reset();
 
     // Parse ApiStub.ts so that we don't have to generate everything manually
-    const stub = cg.parseFile(
-      path.resolve(__dirname, "../../src/codegen/ApiStub.ts")
+    // const stub = cg.parseFile(
+    //   path.resolve(__dirname, "../../src/codegen/Stub.ts")
+    // );
+
+    const stub = ts.createSourceFile(
+      "",
+      StubSource,
+      ts.ScriptTarget.Latest,
+      /*setParentNodes*/ false,
+      ts.ScriptKind.TS
     );
 
     // ApiStub contains `const servers = {}`, find it ...
-    const servers = cg.findFirstVariableDeclaration(stub.statements, "servers");
-    // servers.initializer is readonly, this might break in a future TS version, but works fine for now.
-    Object.assign(servers, {
-      initializer: generateServers(this.spec.servers || []),
-    });
+    // const servers = cg.findFirstVariableDeclaration(stub.statements, "servers");
+    // // servers.initializer is readonly, this might break in a future TS version, but works fine for now.
+    // Object.assign(servers, {
+    //   initializer: generateServers(this.spec.servers || []),
+    // });
 
-    const { initializer } = cg.findFirstVariableDeclaration(
+    // const { initializer } = cg.findFirstVariableDeclaration(
+    //   stub.statements,
+    //   "defaults"
+    // );
+    // if (!initializer || !ts.isObjectLiteralExpression(initializer)) {
+    //   throw new Error("No object literal: defaults");
+    // }
+
+    let APIClass = cg.findNode(
       stub.statements,
-      "defaults"
-    );
-    if (!initializer || !ts.isObjectLiteralExpression(initializer)) {
-      throw new Error("No object literal: defaults");
-    }
+      ts.SyntaxKind.ClassDeclaration,
+      (n) => n.name?.escapedText === "API"
+    ) as ClassDeclaration;
 
-    cg.changePropertyValue(
-      initializer,
-      "baseUrl",
-      defaultBaseUrl(this.spec.servers || [])
-    );
+    // cg.changePropertyValue(
+    //   initializer,
+    //   "baseUrl",
+    //   defaultBaseUrl(this.spec.servers || [])
+    // );
 
     // Collect class functions to be added...
     const functions: ts.FunctionDeclaration[] = [];
@@ -642,6 +671,26 @@ export default class ApiGenerator {
         // split into required/optional
         const [required, optional] = _.partition(parameters, "required");
 
+        // 分出query、header
+        const queryParams = parameters.filter((p) => p.in === "query");
+
+        const _methodParams: ts.ParameterDeclaration[] = [];
+        if (queryParams.length) {
+          _methodParams.push(
+            cg.createParameter("params", {
+              type: factory.createTypeLiteralNode(
+                queryParams.map((p) =>
+                  cg.createPropertySignature({
+                    name: this.resolve(p).name,
+                    questionToken: !p.required,
+                    type: this.getTypeFromSchema(isReference(p) ? p : p.schema),
+                  })
+                )
+              ),
+            })
+          );
+        }
+
         // convert parameter names to argument names ...
         const argNames: any = {};
         parameters
@@ -651,12 +700,12 @@ export default class ApiGenerator {
             argNames[name] = _.camelCase(name);
           });
 
-        // build the method signature - first all the required parameters
-        const methodParams = required.map((p) =>
-          cg.createParameter(argNames[this.resolve(p).name], {
-            type: this.getTypeFromSchema(isReference(p) ? p : p.schema),
-          })
-        );
+        // // build the method signature - first all the required parameters
+        // const methodParams = required.map((p) =>
+        //   cg.createParameter(argNames[this.resolve(p).name], {
+        //     type: this.getTypeFromSchema(isReference(p) ? p : p.schema),
+        //   })
+        // );
 
         let body: any;
         let bodyVar;
@@ -666,11 +715,11 @@ export default class ApiGenerator {
           body = this.resolve(requestBody);
           const schema = this.getSchemaFromContent(body.content);
           const type = this.getTypeFromSchema(schema);
-          bodyVar = _.camelCase(
-            (type as any).name || getReferenceName(schema) || "body"
-          );
-          methodParams.push(
-            cg.createParameter(bodyVar, {
+          // bodyVar = _.camelCase(
+          //   (type as any).name || getReferenceName(schema) || "body"
+          // );
+          _methodParams.push(
+            cg.createParameter("data", {
               type,
               questionToken: !body.required,
             })
@@ -678,39 +727,45 @@ export default class ApiGenerator {
         }
 
         // add an object with all optional parameters
-        if (optional.length) {
-          methodParams.push(
-            cg.createParameter(
-              cg.createObjectBinding(
-                optional
-                  .map((param) => this.resolve(param))
-                  .map(({ name }) => ({ name: argNames[name] }))
-              ),
-              {
-                initializer: factory.createObjectLiteralExpression(),
-                type: factory.createTypeLiteralNode(
-                  optional.map((p) =>
-                    cg.createPropertySignature({
-                      name: argNames[this.resolve(p).name],
-                      questionToken: true,
-                      type: this.getTypeFromSchema(
-                        isReference(p) ? p : p.schema
-                      ),
-                    })
-                  )
-                ),
-              }
-            )
-          );
-        }
+        // if (optional.length) {
+        //   methodParams.push(
+        //     cg.createParameter(
+        //       cg.createObjectBinding(
+        //         optional
+        //           .map((param) => this.resolve(param))
+        //           .map(({ name }) => ({ name: argNames[name] }))
+        //       ),
+        //       {
+        //         initializer: factory.createObjectLiteralExpression(),
+        //         type: factory.createTypeLiteralNode(
+        //           optional.map((p) =>
+        //             cg.createPropertySignature({
+        //               name: argNames[this.resolve(p).name],
+        //               questionToken: true,
+        //               type: this.getTypeFromSchema(
+        //                 isReference(p) ? p : p.schema
+        //               ),
+        //             })
+        //           )
+        //         ),
+        //       }
+        //     )
+        //   );
+        // }
+        const pathParameters = parameters.filter((p) => p.in === "path");
 
-        methodParams.push(
-          cg.createParameter("opts", {
-            type: factory.createTypeReferenceNode(
-              "Oazapfts.RequestOpts",
-              undefined
-            ),
-            questionToken: true,
+        pathParameters.forEach((pp) => {
+          _methodParams.push(
+            cg.createParameter(this.resolve(pp).name, {
+              type: factory.createKeywordTypeNode(ts.SyntaxKind.StringKeyword),
+            })
+          );
+        });
+
+        _methodParams.push(
+          cg.createParameter("config", {
+            type: factory.createTypeReferenceNode("AxiosRequestConfig"),
+            initializer: factory.createObjectLiteralExpression(),
           })
         );
 
@@ -722,122 +777,165 @@ export default class ApiGenerator {
           .filter((p) => p.in === "header")
           .map((p) => p.name);
         let qs;
-        if (query.length) {
-          const paramsByFormatter = _.groupBy(query, getFormatter);
-          qs = callQsFunction(
-            "query",
-            Object.entries(paramsByFormatter).map(([format, params]) => {
-              //const [allowReserved, encodeReserved] = _.partition(params, "allowReserved");
-              return callQsFunction(format, [
-                cg.createObjectLiteral(
-                  params.map((p) => [p.name, argNames[p.name]])
-                ),
-              ]);
-            })
-          );
-        }
+        // if (query.length) {
+        //   const paramsByFormatter = _.groupBy(query, getFormatter);
+        //   qs = callQsFunction(
+        //     "query",
+        //     Object.entries(paramsByFormatter).map(([format, params]) => {
+        //       //const [allowReserved, encodeReserved] = _.partition(params, "allowReserved");
+        //       return callQsFunction(format, [
+        //         cg.createObjectLiteral(
+        //           params.map((p) => [p.name, argNames[p.name]])
+        //         ),
+        //       ]);
+        //     })
+        //   );
+        // }
 
         const url = createUrlExpression(path, qs);
         const init: ts.ObjectLiteralElementLike[] = [
-          factory.createSpreadAssignment(factory.createIdentifier("opts")),
+          factory.createSpreadAssignment(factory.createIdentifier("config")),
+          factory.createPropertyAssignment("url", url),
+          factory.createPropertyAssignment(
+            "method",
+            factory.createStringLiteral(method)
+          ),
         ];
 
-        if (method !== "GET") {
-          init.push(
-            factory.createPropertyAssignment(
-              "method",
-              factory.createStringLiteral(method)
-            )
-          );
-        }
+        // if (method !== "GET") {
+        //   init.push(
+        //     factory.createPropertyAssignment(
+        //       "method",
+        //       factory.createStringLiteral(method)
+        //     )
+        //   );
+        // }
 
-        if (bodyVar) {
+        if (requestBody) {
           init.push(
             cg.createPropertyAssignment(
-              "body",
-              factory.createIdentifier(bodyVar)
+              "data",
+              factory.createIdentifier("data")
             )
           );
         }
 
-        if (header.length) {
-          init.push(
-            factory.createPropertyAssignment(
-              "headers",
-              factory.createObjectLiteralExpression(
-                [
-                  factory.createSpreadAssignment(
-                    factory.createLogicalAnd(
-                      factory.createIdentifier("opts"),
-                      factory.createPropertyAccessExpression(
-                        factory.createIdentifier("opts"),
-                        "headers"
-                      )
-                    )
+        // header
+        // if (header.length) {
+        //   init.push(
+        //     factory.createPropertyAssignment(
+        //       "headers",
+        //       factory.createObjectLiteralExpression(
+        //         [
+        //           factory.createSpreadAssignment(
+        //             factory.createLogicalAnd(
+        //               factory.createIdentifier("opts"),
+        //               factory.createPropertyAccessExpression(
+        //                 factory.createIdentifier("opts"),
+        //                 "headers"
+        //               )
+        //             )
+        //           ),
+        //           ...header.map((name) =>
+        //             cg.createPropertyAssignment(
+        //               name,
+        //               factory.createIdentifier(argNames[name])
+        //             )
+        //           ),
+        //         ],
+        //         true
+        //       )
+        //     )
+        //   );
+        // }
+
+        const args: ts.Expression[] = [
+          factory.createObjectLiteralExpression(init, true),
+        ];
+
+        // if (init.length) {
+        //   const m = Object.entries(contentTypes).find(([type]) => {
+        //     return !!_.get(body, ["content", type]);
+        //   });
+        //   const initObj = factory.createObjectLiteralExpression(init, true);
+        //   args.push(m ? callOazapftsFunction(m[1], [initObj]) : initObj); // json, form, multipart
+        // }
+
+        // functions.push(
+        //   cg.addComment(
+        //     cg.createFunctionDeclaration(
+        //       name,
+        //       {
+        //         modifiers: [cg.modifier.export],
+        //       },
+        //       _methodParams,
+        //       cg.block(
+        //         factory.createReturnStatement(
+        //           this.wrapResult(
+        //             cg.createCall(
+        //               factory.createPropertyAccessExpression(
+        //                 factory.createIdentifier("this"),
+        //                 "request"
+        //               ),
+        //               {
+        //                 args,
+        //                 typeArgs:
+        //                   returnType === "json" || returnType === "blob"
+        //                     ? [
+        //                         this.getTypeFromResponses(responses!) ||
+        //                           ts.SyntaxKind.AnyKeyword,
+        //                       ]
+        //                     : undefined,
+        //               }
+        //             )
+        //           )
+        //         )
+        //       )
+        //     ),
+        //     summary || description
+        //   )
+        // );
+        console.log(name);
+        const methodDeclaration = factory.createMethodDeclaration(
+          undefined,
+          undefined,
+          undefined,
+          factory.createIdentifier(name),
+          undefined,
+          undefined,
+          _methodParams,
+          undefined,
+          cg.block(
+            factory.createReturnStatement(
+              this.wrapResult(
+                cg.createCall(
+                  factory.createPropertyAccessExpression(
+                    factory.createIdentifier("this"),
+                    "request"
                   ),
-                  ...header.map((name) =>
-                    cg.createPropertyAssignment(
-                      name,
-                      factory.createIdentifier(argNames[name])
-                    )
-                  ),
-                ],
-                true
-              )
-            )
-          );
-        }
-
-        const args: ts.Expression[] = [url];
-
-        if (init.length) {
-          const m = Object.entries(contentTypes).find(([type]) => {
-            return !!_.get(body, ["content", type]);
-          });
-          const initObj = factory.createObjectLiteralExpression(init, true);
-          args.push(m ? callOazapftsFunction(m[1], [initObj]) : initObj); // json, form, multipart
-        }
-
-        functions.push(
-          cg.addComment(
-            cg.createFunctionDeclaration(
-              name,
-              {
-                modifiers: [cg.modifier.export],
-              },
-              methodParams,
-              cg.block(
-                factory.createReturnStatement(
-                  this.wrapResult(
-                    callOazapftsFunction(
-                      {
-                        json: "fetchJson",
-                        text: "fetchText",
-                        blob: "fetchBlob",
-                      }[returnType],
-                      args,
+                  {
+                    args,
+                    typeArgs:
                       returnType === "json" || returnType === "blob"
                         ? [
                             this.getTypeFromResponses(responses!) ||
                               ts.SyntaxKind.AnyKeyword,
                           ]
-                        : undefined
-                    )
-                  )
+                        : undefined,
+                  }
                 )
               )
-            ),
-            summary || description
+            )
           )
         );
+        Object.assign(APIClass, {
+          members: cg.appendNodes(APIClass.members, methodDeclaration),
+        });
       });
     });
 
     Object.assign(stub, {
-      statements: cg.appendNodes(
-        stub.statements,
-        ...[...this.aliases, ...functions]
-      ),
+      statements: cg.appendNodes(stub.statements, ...this.aliases),
     });
 
     return stub;

@@ -15,5 +15,12 @@
     "forceConsistentCasingInFileNames": true,
     "noUnusedLocals": false
   },
-  "exclude": ["demo", "lib", "src/codegen/ApiStub.ts", "jest.config.ts"]
+  "exclude": [
+    "demo",
+    "lib",
+    "src/codegen/ApiStub.ts",
+    "src/codegen/Stub.ts",
+    "api.ts",
+    "jest.config.ts"
+  ]
 }
