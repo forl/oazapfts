@@ -22,7 +22,7 @@
   resolved "https://registry.npm.taobao.org/@apidevtools/swagger-methods/download/@apidevtools/swagger-methods-3.0.2.tgz#b789a362e055b0340d04712eafe7027ddc1ac267"
   integrity sha1-t4mjYuBVsDQNBHEur+cCfdwawmc=
 
-"@apidevtools/swagger-parser@^10.0.1":
+"@apidevtools/swagger-parser@^10.0.3":
   version "10.0.3"
   resolved "https://registry.nlark.com/@apidevtools/swagger-parser/download/@apidevtools/swagger-parser-10.0.3.tgz#32057ae99487872c4dd96b314a1ab4b95d89eaf5"
   integrity sha1-MgV66ZSHhyxN2WsxShq0uV2J6vU=
@@ -3586,7 +3586,7 @@ supports-hyperlinks@^2.0.0:
     has-flag "^4.0.0"
     supports-color "^7.0.0"
 
-swagger2openapi@^7.0.7:
+swagger2openapi@^7.0.8:
   version "7.0.8"
   resolved "https://registry.nlark.com/swagger2openapi/download/swagger2openapi-7.0.8.tgz#12c88d5de776cb1cbba758994930f40ad0afac59"
   integrity sha1-EsiNXed2yxy7p1iZSTD0CtCvrFk=

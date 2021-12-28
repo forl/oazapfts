@@ -32,7 +32,7 @@ export async function generateSource(spec: string, opts: Opts) {
   if (isOpenApiV3) {
     v3Doc = doc as OpenAPIV3.Document;
   } else {
-    const result = await converter.convertObj(doc, {});
+    const result = await converter.convertObj(doc, { anchors: true });
     v3Doc = result.openapi as OpenAPIV3.Document;
   }
   const ast = generateAst(v3Doc, opts, !isOpenApiV3);

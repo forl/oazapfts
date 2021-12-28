@@ -7,7 +7,8 @@ import * as cg from "./tscodegen";
 import { Opts } from ".";
 import { threadId } from "worker_threads";
 
-const StubSource = `import { AxiosResponse, AxiosRequestConfig } from 'axios';
+const StubSource = `/* eslint-disable */
+import { AxiosResponse, AxiosRequestConfig } from 'axios';
 
 type RequestFunction =  < T = any, R = AxiosResponse < T >> (config: AxiosRequestConfig)=> Promise<R>;
 
@@ -467,30 +468,11 @@ export default class ApiGenerator {
 
   getTypeFromResponses(responses: OpenAPIV3.ResponsesObject) {
     return factory.createUnionTypeNode(
-      Object.entries(responses).map(([code, res]) => {
-        const statusType =
-          code === "default"
-            ? cg.keywordType.number
-            : factory.createLiteralTypeNode(factory.createNumericLiteral(code));
-
-        const props = [
-          cg.createPropertySignature({
-            name: "status",
-            type: statusType,
-          }),
-        ];
-
-        const dataType = this.getTypeFromResponse(res);
-        if (dataType !== cg.keywordType.void) {
-          props.push(
-            cg.createPropertySignature({
-              name: "data",
-              type: dataType,
-            })
-          );
-        }
-        return factory.createTypeLiteralNode(props);
-      })
+      Object.entries(responses)
+        .map(([code, res]) => {
+          return this.getTypeFromResponse(res);
+        })
+        .filter((type) => type !== cg.keywordType.void)
     );
   }
 
@@ -617,7 +599,7 @@ export default class ApiGenerator {
     // );
 
     // Collect class functions to be added...
-    const functions: ts.FunctionDeclaration[] = [];
+    // const functions: ts.FunctionDeclaration[] = [];
 
     // Keep track of names to detect duplicates
     const names: Record<string, number> = {};
@@ -811,6 +793,15 @@ export default class ApiGenerator {
         //   );
         // }
 
+        if (queryParams.length) {
+          init.push(
+            cg.createPropertyAssignment(
+              "params",
+              factory.createIdentifier("params")
+            )
+          );
+        }
+
         if (requestBody) {
           init.push(
             cg.createPropertyAssignment(
@@ -896,6 +887,43 @@ export default class ApiGenerator {
         //   )
         // );
         console.log(name);
+
+        const propertyDeclaration = factory.createPropertyDeclaration(
+          undefined,
+          undefined,
+          factory.createIdentifier(name),
+          undefined,
+          undefined,
+          factory.createArrowFunction(
+            undefined,
+            undefined,
+            _methodParams,
+            undefined,
+            undefined,
+            cg.block(
+              factory.createReturnStatement(
+                this.wrapResult(
+                  cg.createCall(
+                    factory.createPropertyAccessExpression(
+                      factory.createIdentifier("this"),
+                      "request"
+                    ),
+                    {
+                      args,
+                      typeArgs:
+                        returnType === "json" || returnType === "blob"
+                          ? [
+                              this.getTypeFromResponses(responses!) ||
+                                ts.SyntaxKind.AnyKeyword,
+                            ]
+                          : undefined,
+                    }
+                  )
+                )
+              )
+            )
+          )
+        );
         const methodDeclaration = factory.createMethodDeclaration(
           undefined,
           undefined,
@@ -929,13 +957,24 @@ export default class ApiGenerator {
           )
         );
         Object.assign(APIClass, {
-          members: cg.appendNodes(APIClass.members, methodDeclaration),
+          members: cg.appendNodes(APIClass.members, propertyDeclaration),
         });
       });
     });
 
+    const newStatements: ts.Statement[] = [];
+    stub.statements.forEach((statement, index) => {
+      if (
+        ts.isClassDeclaration(statement) &&
+        statement.name?.escapedText === "API"
+      ) {
+        newStatements.push(...this.aliases);
+      }
+      newStatements.push(statement);
+    });
+
     Object.assign(stub, {
-      statements: cg.appendNodes(stub.statements, ...this.aliases),
+      statements: factory.createNodeArray(newStatements),
     });
 
     return stub;
